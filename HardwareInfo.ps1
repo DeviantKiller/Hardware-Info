@@ -22,6 +22,7 @@ SCRIPT WILL DELETE PREVIOUS livePC list to make sure no entries are duplicated.
 1.3.1	Improved method on getting last logon time
 1.3.2   Cleaned up un-needed Code (Old methods that are now unused.)
         Removed un-needed blank lines
+1.3.3	Added "Completion time" line
 	
 ##>
  
@@ -187,6 +188,7 @@ $time = (Get-Date).tostring("dd-MM-yyyy-HH.mm.ss")
 $RenameCSV = "$($newCSV.DirectoryName)\$($newCSV.BaseName)[$($time)]$($newCSV.Extension)"
 Rename-Item $exportlocation -NewName $RenameCSV    
 
+Write-host -foregroundcolor green "Script finished at $time"
 write-host -foregroundcolor cyan "$csvfile has been renamed to $RenameCSV)"
 write-host -foregroundcolor cyan "Script is complete, the results are here: $path"
 
