@@ -20,9 +20,10 @@ SCRIPT WILL DELETE PREVIOUS livePC list to make sure no entries are duplicated.
 	    Made Variables easier to modify
 	    Re-arranged Script to make it more logical and grouped
 1.3.1	Improved method on getting last logon time
+1.3.2   Cleaned up un-needed Code (Old methods that are now unused.)
+        Removed un-needed blank lines
 	
 ##>
-
  
 # On error the script will continue silently without 
 $erroractionpreference = "SilentlyContinue"
@@ -43,7 +44,6 @@ $testcomputers = Get-ADComputer -Filter {(OperatingSystem -notlike "*windows*ser
 $test_computer_count = $testcomputers.Length;
 $x = 0;
  
-
 $path = "D:\temp\Hardware"
 $csvName = "pcInventory.csv"
 $exportLocation = "$path\$csvName"
@@ -104,25 +104,19 @@ foreach ($livePC in $ComputerName){
     select PScomputerName, driveletter, label, @{LABEL='GBfreespace';EXPRESSION={"{0:N2}" -f($_.freespace/1GB)} } |
     Where-Object { $_.driveletter -match "C:" }
     $cpu = Get-WmiObject Win32_Processor  -computername $livePC
-    #$username = Get-ChildItem "\\$livePC\c$\Users" | Sort-Object LastWriteTime -Descending | Select Name, LastWriteTime -first 1
-
     $username = Invoke-Command -ComputerName $livePC {Get-ItemProperty -Path 'HKLM:\Software\Microsoft\windows\currentVersion\Authentication\LogonUI\' -Name LastLoggedOnUser | select LastLoggedOnUser}
-    #2nd attempt of Location using Registry.
     $location = Invoke-Command -ComputerName $livePC {Get-ItemProperty -Path 'HKLM:\SOFTWARE\WOW6432Node\RM\Connect\' -Name CurrentLocation | select CurrentLocation}
-
     $lastlogtime = Get-ADComputer -identity $livePC -Properties * | select LastLogonDate
-
     $totalMemory = [math]::round($Hardware.TotalPhysicalMemory/1024/1024/1024, 2)
     $lastBoot = $OS.ConvertToDateTime($OS.LastBootUpTime)
     $buildDate = ([WMI]'').ConvertToDateTime((Get-WmiObject Win32_OperatingSystem).InstallDate)
+    #Graphics Adapters
     $gpuDriver = Get-WmiObject Win32_VideoController -ComputerName $livePC
-    
+    #Individual Graphics Devices
     $nvidiaID = Get-WmiObject Win32_PnPSignedDriver -ComputerName $livePC| select devicename, HardWareID | where {$_.devicename -like "*nvidia*"}
     $intelID = Get-WmiObject Win32_PnPSignedDriver -ComputerName $livePC| select devicename, HardWareID | where {$_.devicename -like "*Graphics*"}
     $MicroID = Get-WmiObject Win32_PnPSignedDriver -ComputerName $livePC| select devicename, HardWareID | where {$_.devicename -like "*Basic Display Ad*"}
     $EcoID = Get-WmiObject Win32_PnPSignedDriver -ComputerName $livePC| select devicename, HardWareID | where {$_.devicename -like "*Intel(R) 965 Express*"}
-   
-    
 
     $computer_progress = [int][Math]::Ceiling((($i / $computer_count) * 100))
 	# Progress bar
@@ -194,6 +188,5 @@ $RenameCSV = "$($newCSV.DirectoryName)\$($newCSV.BaseName)[$($time)]$($newCSV.Ex
 Rename-Item $exportlocation -NewName $RenameCSV    
 
 write-host -foregroundcolor cyan "$csvfile has been renamed to $RenameCSV)"
-
 write-host -foregroundcolor cyan "Script is complete, the results are here: $path"
 
