@@ -40,7 +40,6 @@ SCRIPT WILL DELETE PREVIOUS livePC list to make sure no entries are duplicated.
 $erroractionpreference = "SilentlyContinue"
 $startTime = (Get-Date).tostring("dd-MM-yyyy-HH.mm.ss")  
 <# Using a text file with a location picker
-#
 $fileLocation = New-Object System.Windows.Forms.OpenFileDialog -Property @{ 
 InitialDirectory = [Environment]::GetFolderPath('Desktop') 
 Filter = 'Documents (*.csv)|*.csv|txt files (*.txt)|*.txt'
@@ -53,17 +52,24 @@ $testcomputers = $fileLocation.FileName
 $testcomputers = Get-ADComputer -Filter {(OperatingSystem -notlike "*windows*server*")}
 # Looking through the txt file above and counting computer names. then working out % based on how many have been pinged
 $test_computer_count = $testcomputers.Length;
+#Percentage Count
 $x = 0;
+#Dead Computer Count
 $xDead = 0;
+#Online Computer Count
 $xLive = 0;
+#Total Computer Count
 $xTotal = 0;
+#Resets values if re-ran in ISE
 $ResultObject = $null
 $newobj = $null
- 
+#Can Change These 
 $path = "D:\temp\Hardware"
 $csvName = "pcInventory.csv"
+$livePCs = "livePCs.txt"
+#Hard-coded
+$fileName = "$path\$livePCs"
 $exportLocation = "$path\$csvName"
-$fileName = "$path\livePCs.txt"
 $ResultObject = New-Object System.Collections.Generic.List[object]
 
 #Creates Hardware Folder if non existing
@@ -92,7 +98,7 @@ foreach ($computer in $testcomputers) {
         # delete the -count 2 portion
    if (Test-Connection -ComputerName $computer.Name -Quiet -count 1){
         # The path to the livePCs.txt file, change to meet your needs
-        Add-Content -value $computer.Name -path $path\livePCs.txt
+        Add-Content -value $computer.Name -path $fileName
         $xLive++;
         $xTotal++;
         Write-Host -foregroundcolor Green "$xTotal. $($computer.Name) has been added to the Live List. $xLive of $test_computer_count"
@@ -116,7 +122,7 @@ write-host -foregroundcolor Red "$xDead of $test_computer_count Computers could 
 write-host -foregroundcolor cyan "Writing Data to CSV."
 write-host `r
  
-$ComputerName = gc -Path "$path\livePCs.txt"
+$ComputerName = gc -Path "$fileName"
  
 $computer_count = $ComputerName.Length;
 # The results of the script are here
