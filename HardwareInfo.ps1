@@ -30,7 +30,9 @@ SCRIPT WILL DELETE PREVIOUS livePC list to make sure no entries are duplicated.
 1.5     Added array for computer counting and numbering for info
 1.6     New method of obtaining CPU info - Less resource and similtanious
 1.7     Re-write of all info gathering. now using  "Invoke-Command -ComputerName $livePC -Scriptblock {Get-CIMInstance ...} "
-1.8     Attempt of usage of Out-Gridview
+1.8     Added Out-Gridview
+        Ping once on hardware gather to avoid hangs if computers are shutdown
+
 	
 ##>
  
@@ -55,12 +57,14 @@ $x = 0;
 $xDead = 0;
 $xLive = 0;
 $xTotal = 0;
+$ResultObject = $null
+$newobj = $null
  
 $path = "D:\temp\Hardware"
 $csvName = "pcInventory.csv"
 $exportLocation = "$path\$csvName"
 $fileName = "$path\livePCs.txt"
-
+$ResultObject = New-Object System.Collections.Generic.List[object]
 
 #Creates Hardware Folder if non existing
 If(!(test-path $path))
@@ -72,12 +76,17 @@ If(!(test-path $path))
 if (Test-Path $fileName) 
 {
     Remove-Item $fileName
-    Write-Host -foregroundcolor Green "The old $fileName has been deleted."
+    Write-Host -foregroundcolor Red "The old $fileName has been deleted."
 }
- 
+#Removes incomplete $csv 
+if (Test-Path $exportLocation) 
+{
+    Remove-Item $exportLocation
+    Write-Host -foregroundcolor Red "The old $csvName has been deleted."
+}
 write-host `r
 write-host -foregroundcolor Yellow "Checking online status of $test_computer_count computers, this may take a while."
- 
+# PING COMPUTERS TO FIND OUT ONLINE/OFFLINE LIST
 foreach ($computer in $testcomputers) {
         # I only send 2 echo requests to speed things up, if you want the defaut 4 
         # delete the -count 2 portion
@@ -114,8 +123,9 @@ $computer_count = $ComputerName.Length;
  
 $i = 0;
 $p = 0;
-#$livePC = "RIGDT143"
+#$livePC = "BRKAD002"
 foreach ($livePC in $ComputerName){
+    if (Test-Connection -ComputerName $livePC -Quiet -count 1){
     $p++;
     write-host -foregroundcolor Green "Probing $livePC - $p of $($ComputerName.Count)"
     $computer_progress = [int][Math]::Ceiling((($i / $computer_count) * 100))
@@ -169,32 +179,6 @@ foreach ($livePC in $ComputerName){
     $lastlogtime = Get-ADComputer -identity $livePC -Properties * | select LastLogonDate
 
     $totalMemory = [math]::round($compSys.TotalPhysicalMemory/1024/1024/1024, 2)
-    #$lastBoot = $OS.ConvertToDateTime($OS.LastBootUpTime)
-
-    <##
-    OLD METHOD below to be removed and updated to Invoke / Get-CimInstances
-    
-
-    #$Bios = get-wmiobject win32_bios -Computername $livePC
-    #$Hardware = get-wmiobject Win32_computerSystem -Computername $livePC
-    #$Sysbuild = get-wmiobject Win32_WmiSetting -Computername $livePC
-    #$OS = gwmi Win32_OperatingSystem -Computername $livePC
-    #$Networks = Get-WmiObject Win32_NetworkAdapterConfiguration -ComputerName $livePC | ? {$_.IPEnabled}
-    
-    $driveSpace = gwmi win32_volume -computername $livePC -Filter 'drivetype = 3' | 
-    select PScomputerName, driveletter, label, @{LABEL='GBfreespace';EXPRESSION={"{0:N2}" -f($_.freespace/1GB)} } |
-    Where-Object { $_.driveletter -match "C:" }
-   
-    #$totalMemory = [math]::round($compSys.TotalPhysicalMemory/1024/1024/1024, 2)
-    #$lastBoot = $OS.ConvertToDateTime($OS.LastBootUpTime)
-    #Graphics Adapters
-    #$gpuDriver = Get-WmiObject Win32_VideoController -ComputerName $livePC
-    #Individual Graphics Devices
-    #$nvidiaID = Get-WmiObject Win32_PnPSignedDriver -ComputerName $livePC| select devicename, HardWareID | where {$_.devicename -like "*nvidia*"} | Select-Object -first 1
-    #$intelID = Get-WmiObject Win32_PnPSignedDriver -ComputerName $livePC| select devicename, HardWareID | where {$_.devicename -like "*Graphics*"} | Select-Object -first 1
-    #$MicroID = Get-WmiObject Win32_PnPSignedDriver -ComputerName $livePC| select devicename, HardWareID | where {$_.devicename -like "*Basic Display Ad*"} | Select-Object -first 1
-    #$EcoID = Get-WmiObject Win32_PnPSignedDriver -ComputerName $livePC| select devicename, HardWareID | where {$_.devicename -like "*Intel(R) 965 Express*"} | Select-Object -first 1
-    ##>
 
     foreach ($Network in $Networks) {
     $IPAddress  = $Network.IpAddress[0]
@@ -205,7 +189,7 @@ foreach ($livePC in $ComputerName){
     $OutputObj | Add-Member -MemberType NoteProperty -Name Manufacturer -Value $compSys.Manufacturer
     $OutputObj | Add-Member -MemberType NoteProperty -Name Model -Value $compSys.Model
     $OutputObj | Add-Member -MemberType NoteProperty -Name SerialNumber -Value $($bios.SerialNumber)
-    $OutputObj | Add-Member -MemberType NoteProperty -Name New_CPU_Info -Value $($cpu.Name)
+    $OutputObj | Add-Member -MemberType NoteProperty -Name CPU -Value $($cpu.Name)
     $OutputObj | Add-Member -MemberType NoteProperty -Name CPU_Cores -Value $($cpu.NumberOfCores)
     $OutputObj | Add-Member -MemberType NoteProperty -Name CPU_LogicalCores -Value $($cpu.NumberOfLogicalProcessors)
     #$OutputObj | Add-Member -MemberType NoteProperty -Name CPU_Socket -Value $cpu.SocketDesignation
@@ -244,17 +228,33 @@ foreach ($livePC in $ComputerName){
     ForEach-Object{
             $newobj = [PSCustomObject]@{
                 'ComputerName' = $livePC.ToUpper()
-                'IP Address' = $IPAddress
                 'Manufacturer' = $compSys.Manufacturer
                 'Model' = $compSys.Model
+                'Serial Number' = $($bios.SerialNumber)
                 'CPU' = $($cpu.Name)
+                'Cores' = $($cpu.NumberOfCores)
+                'Logical' = $($cpu.NumberOfLogicalProcessors)
+                'RAM' = $totalMemory
+                'OS' = $OS.Caption
+                'Location' = $($location.CurrentLocation)
+                'HDD Size' = $vol.HDDCapacity
+                'HDD Free' = $vol.GBfreespace
+                'Video Card' = $Card.Name
+                'IP Address' = $IPAddress
+                'MAC' = $MACAddress
+                'Last User' = $($username.LastLoggedOnUser)
+                'Login Date' = $($lastlogtime.LastLogonDate)
+                'Last Restart' = $OS.LastBootUpTime
+                'Last Build' = $($buildDate.InstallDate)
+
             }
             $ResultObject.Add($newobj)
             }
         }
     } 
+    }
 
-    $ResultObject  | Out-Gridview
+    $ResultObject  | Out-Gridview -Title "Hardware Information"
     <##
     Write-Host -ForegroundColor Yellow "$computer has been accounted for"
     Write-Host -ForegroundColor Green "$IPAddress"
@@ -271,9 +271,9 @@ foreach ($livePC in $ComputerName){
    ##>
    #Write-Host -ForegroundColor Green "$($buildDate.InstallDate)"
    
-   }
+   
  
-  }
+  
 write-host -foregroundcolor cyan "Renaming $csvName" 
  
 $newCSV = Get-ChildItem $exportLocation 
@@ -286,3 +286,4 @@ write-host -foregroundcolor cyan "$csvName has been renamed to $RenameCSV)"
 write-host -foregroundcolor cyan "Script is complete, the results are here: $path"
 Write-host -foregroundcolor green "Script started at $startTime and finished at $time"
 
+Invoke-Item $path
