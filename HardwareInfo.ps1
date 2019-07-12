@@ -32,10 +32,297 @@ SCRIPT WILL DELETE PREVIOUS livePC list to make sure no entries are duplicated.
 1.7     Re-write of all info gathering. now using  "Invoke-Command -ComputerName $livePC -Scriptblock {Get-CIMInstance ...} "
 1.8     Added Out-Gridview
         Ping once on hardware gather to avoid hangs if computers are shutdown
+1.9     Created Functions to deal with bulk of script
 
 	
 ##>
  
+Function FindOS
+    {
+        if (Test-Connection -ComputerName $livePC  -Quiet -count 1)
+            {
+                $global:OS = Invoke-Command -ComputerName $livePC -Scriptblock {Get-CIMInstance Win32_OperatingSystem} | Select InstallDate, OSArchitecture, Caption, LastBootUpTime
+                $global:WindowsOS = $OS.Caption
+                $global:WindowsInstallDate = $global:OS.InstallDate
+                $global:WindowsLastBootUpTime = $global:OS.LastBootUpTime
+                $global:WindowsOSArchitecture = $global:OS.OSArchitecture
+            }
+        Else
+            {
+                $Global:WindowsOS = "Station Shutdown"
+                $global:WindowsLastBootUpTime = "Station Shutdown"
+                $global:WindowsOSArchitecture = "Station Shutdown"
+            }
+    }
+
+
+Function FindBIOS
+    {
+        if (Test-Connection -ComputerName $livePC  -Quiet -count 1)
+            {
+                $global:bios = Invoke-Command -ComputerName $livePC -Scriptblock {Get-CIMInstance win32_bios} | Select SerialNumber, SMBIOSBIOSVersion
+                $global:systemBios = $global:Bios.serialnumber
+                $global:BiosVer = $global:bios.SMBIOSBIOSVersion
+            }
+        Else
+            {
+                $global:systemBios = "Station Shutdown"
+                $global:BiosVer = "Station Shutdown"
+            }
+    }
+
+Function FindcompSys
+    {
+        if (Test-Connection -ComputerName $livePC  -Quiet -count 1)
+            {
+                $global:compSys = Invoke-Command -ComputerName $livePC -Scriptblock {Get-CIMInstance Win32_computerSystem} | Select SerialNumber, Manufacturer, Model, TotalPhysicalMemory, SystemType
+                $global:Manufacturer = $global:compSys.Manufacturer
+                $global:PCModel = $($global:compSys.Model)
+                $global:OSType = $global:compSys.SystemType
+                $global:totalMemory = [math]::round($global:compSys.TotalPhysicalMemory/1024/1024/1024, 2)
+            }
+        Else
+            {
+                $global:Manufacturer = "Station Shutdown"
+                $global:PCModel = "Station Shutdown"
+                $global:OSType = "Station Shutdown"
+                $global:totalMemory = "Station Shutdown"
+            }
+    }
+
+Function FindProcessor
+    {
+        if (Test-Connection -ComputerName $livePC  -Quiet -count 1)
+            {
+                $global:cpu = Invoke-Command -ComputerName $livePC -Scriptblock {Get-CIMInstance Win32_Processor} | Select Name, NumberOfCores, NumberOfLogicalProcessors
+                $global:CpuName = $global:cpu.Name
+                $global:CpuCores = $global:cpu.NumberOfCores
+                $global:CpuLogical = $global:cpu.NumberOfLogicalProcessors
+            }
+        Else
+            {
+                $global:CpuName = "Station Shutdown"
+                $global:CpuCores = "Station Shutdown"
+                $global:CpuLogical = "Station Shutdown"
+            }
+    }
+
+Function FindWMI
+    {
+        if (Test-Connection -ComputerName $livePC  -Quiet -count 1)
+            {
+                $global:wmi = Invoke-Command -ComputerName $livePC -Scriptblock {Get-CIMInstance Win32_WmiSetting} | Select BuildVersion
+                $global:BuildVersion = $global:wmi.BuildVersion
+            }
+        Else
+            {
+                $global:BuildVersion = "Station Shutdown"
+            }
+    }
+
+Function FindWin10Ver
+    {
+        if (Test-Connection -ComputerName $livePC  -Quiet -count 1)
+            {
+                $global:newSysBuild = Invoke-Command -ComputerName $livePC {Get-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\' -Name ReleaseId | select ReleaseId}
+                $global:Win10Ver = $global:newSysBuild.ReleaseId
+            }
+        Else
+            {
+                $global:Win10Ver = "Station Shutdown"
+            }
+    }
+
+
+Function FindWin10VerNew
+    {
+        $regkeypath= "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\" 
+        $value1 = Invoke-Command -ComputerName $livePC {Get-ItemProperty -Path $regkeypath}.ReleaseId -eq $null
+        if ($value1 -eq $False)
+            {
+                $global:newSysBuild = Invoke-Command -ComputerName $livePC {Get-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\' -Name ReleaseId | select ReleaseId}
+                $global:Win10Ver = $global:newSysBuild.ReleaseId
+            }
+        Elseif ($value1 -eq $False) 
+            {
+                $global:Win10Ver = "Not Win10"
+            }
+        Else
+            {
+                 $global:Win10Ver = "Station Offline"
+            }
+    }
+
+
+Function FindNetwork
+    {
+        if (Test-Connection -ComputerName $livePC  -Quiet -count 1)
+            {
+                $global:networks = Invoke-Command -ComputerName $livePC -Scriptblock {Get-CIMInstance Win32_NetworkAdapterConfiguration | ? {$_.IPEnabled}} | Select IPAddress, MACAddress
+                $global:IPAddress = $global:Networks.IPAddress[0]
+                $global:MACAddress = $global:Networks.MACAddress
+            }
+        Else
+            {
+                $global:IPAddress = "Station Shutdown"
+                $global:MACAddress = "Station Shutdown"
+            }
+    }
+
+Function FindVol
+    {
+        if (Test-Connection -ComputerName $livePC  -Quiet -count 1)
+            {
+                $global:vol = Invoke-Command -ComputerName $livePC -Scriptblock {Get-CIMInstance Win32_volume} | Select Caption, driveletter, @{LABEL='GBfreespace';EXPRESSION={"{0:N2}" -f($_.freespace/1GB)}  }, @{LABEL='HDDCapacity';EXPRESSION={"{0:N2}" -f($_.Capacity/1GB)}  }| Where-Object { $_.driveletter -match "C:" } | where {$_.Caption -like "C:\*"} 
+                $global:HDD = $global:vol.HDDCapacity
+                $global:HDDFree = $global:vol.GBfreespace
+            }
+        Else
+            {
+                $global:HDD = "Station Shutdown"
+                $global:HDDFree = "Station Shutdown"
+            }
+    }
+
+Function FindVideoController($OP)
+    {
+        if (Test-Connection -ComputerName $livePC  -Quiet -count 1)
+            {
+                $global:gpuDriver = Invoke-Command -ComputerName $livePC -Scriptblock {Get-CIMInstance Win32_VideoController} 
+            }
+        Else
+            {
+
+            }
+    }
+
+Function FindNvidia
+    {
+        if (Test-Connection -ComputerName $livePC  -Quiet -count 1)
+            {
+                $global:nvidiaID = Invoke-Command -ComputerName $livePC -Scriptblock {Get-CIMInstance Win32_PnPSignedDriver} | select devicename, HardWareID | where {$_.devicename -like "*nvidia*"} | Select-Object -first 1
+                $global:Nvidia = $global:nvidia.HardWareID 
+            }
+        Else
+            {
+                $global:Nvidia = "Station Shutdown"
+            }
+    }
+
+Function FindIntel
+    {
+        if (Test-Connection -ComputerName $livePC  -Quiet -count 1)
+            {
+                $global:intelID  = Invoke-Command -ComputerName $livePC -Scriptblock {Get-CIMInstance Win32_PnPSignedDriver} | select devicename, HardWareID | where {$_.devicename -like "*Graphics*"} | Select-Object -first 1
+                $global:intel = $global:intelID.HardWareID
+            }
+        Else
+            {
+                $global:intel = "Station Shutdown"
+            }
+    }
+    
+Function FindBasic
+    {
+        if (Test-Connection -ComputerName $livePC  -Quiet -count 1)
+            {
+                $global:MicroID  = Invoke-Command -ComputerName $livePC -Scriptblock {Get-CIMInstance Win32_PnPSignedDriver} | select devicename, HardWareID | where {$_.devicename -like "*Basic Display Ad*"} | Select-Object -first 1
+                $global:MSBasic = $global:MicroID.HardWareID 
+            }
+        Else
+            {
+                $global:MSBasic = "Station Shutdown"
+            }
+    }
+    
+Function FindEco965
+    {
+       if (Test-Connection -ComputerName $livePC  -Quiet -count 1)
+            {
+                $global:EcoID = Invoke-Command -ComputerName $livePC -Scriptblock {Get-CIMInstance Win32_PnPSignedDriver} | select devicename, HardWareID | where {$_.devicename -like "*Intel(R) 965 Express*"} | Select-Object -first 1 
+                $global:Eco965 = $global:EcoID.HardWareID
+            }
+        Else
+            {
+                $global:Eco965 = "Station Shutdown"
+            }
+    }
+    
+Function FindLastUser
+    {
+        if (Test-Connection -ComputerName $livePC  -Quiet -count 1)
+            {
+                $global:username = Invoke-Command -ComputerName $livePC {Get-ItemProperty -Path 'HKLM:\Software\Microsoft\windows\currentVersion\Authentication\LogonUI\' -Name LastLoggedOnUser | select LastLoggedOnUser}
+                $global:User = $global:username.LastLoggedOnUser
+            }
+        Else
+            {
+                $global:User = "Station Shutdown"
+            }
+    }
+   
+Function FindCurrentLocation
+    {
+        if (Test-Connection -ComputerName $livePC  -Quiet -count 1)
+            {
+                $global:location = Invoke-Command -ComputerName $livePC {Get-ItemProperty -Path 'HKLM:\SOFTWARE\WOW6432Node\RM\Connect\' -Name CurrentLocation | select CurrentLocation} 
+                $global:StationLocation = $global:location.CurrentLocation
+            }
+        Else
+            {
+                $global:StationLocation = "Station Shutdown"
+            }
+    }
+    
+Function FindLastLoggedOn
+    {
+        if (Test-Connection -ComputerName $livePC  -Quiet -count 1)
+            {
+                $global:lastlogtime = Get-ADComputer -identity $livePC -Properties * | select LastLogonDate
+                $global:Lastlogontime = $global:lastlogtime.LastLogonDate
+            }
+        Else
+            {
+                $global:Lastlogontime = "Station Shutdown"
+            }
+    }
+    
+Function CheckExisting
+    {
+        If(!(test-path $path))
+            {
+                New-Item -ItemType Directory -Force -Path $path
+                Write-Host -foregroundcolor Green "$path has been created."
+            }
+        Else
+            {
+                Write-Host -foregroundcolor DarkYellow "$path has ALREADY been created."
+            }
+
+#Deletes livePC's text 
+        if (Test-Path $fileName) 
+            {
+                Remove-Item $fileName
+                Write-Host -foregroundcolor DarkYellow "The old $fileName has been deleted."
+            }
+        Else
+            {
+                Write-Host -foregroundcolor Darkyellow "$fileName does not exist..."
+            }
+        #Removes incomplete $csv 
+        if (Test-Path $exportLocation) 
+            {
+                Remove-Item $exportLocation
+                Write-Host -foregroundcolor Red "The old $exportLocation has been deleted."
+            }
+        Else
+            {
+                Write-Host -foregroundcolor Darkyellow "$exportLocation does not exist..."
+            }
+    }
+
+
+
 # On error the script will continue silently without 
 $erroractionpreference = "SilentlyContinue"
 $startTime = (Get-Date).tostring("dd-MM-yyyy-HH.mm.ss")  
@@ -47,7 +334,7 @@ Filter = 'Documents (*.csv)|*.csv|txt files (*.txt)|*.txt'
 $null = $fileLocation.ShowDialog()
 $testcomputers = $fileLocation.FileName
 #>
- 
+
 # Use AD to get Computers and filter out all that aren't Windows Server OS
 $testcomputers = Get-ADComputer -Filter {(OperatingSystem -notlike "*windows*server*")}
 # Looking through the txt file above and counting computer names. then working out % based on how many have been pinged
@@ -72,24 +359,8 @@ $fileName = "$path\$livePCs"
 $exportLocation = "$path\$csvName"
 $ResultObject = New-Object System.Collections.Generic.List[object]
 
-#Creates Hardware Folder if non existing
-If(!(test-path $path))
-{
-      New-Item -ItemType Directory -Force -Path $path
-      Write-Host -foregroundcolor Green "$path has been created."
-}
-#Deletes livePC's text 
-if (Test-Path $fileName) 
-{
-    Remove-Item $fileName
-    Write-Host -foregroundcolor Red "The old $fileName has been deleted."
-}
-#Removes incomplete $csv 
-if (Test-Path $exportLocation) 
-{
-    Remove-Item $exportLocation
-    Write-Host -foregroundcolor Red "The old $csvName has been deleted."
-}
+CheckExisting
+
 write-host `r
 write-host -foregroundcolor Yellow "Checking online status of $test_computer_count computers, this may take a while."
 # PING COMPUTERS TO FIND OUT ONLINE/OFFLINE LIST
@@ -140,73 +411,47 @@ foreach ($livePC in $ComputerName){
 	Sleep(1);
     $i++;
 
-    $OS = Invoke-Command -ComputerName $livePC -Scriptblock {Get-CIMInstance Win32_OperatingSystem} | Select InstallDate, OSArchitecture, Caption, LastBootUpTime
-        #$OS.InstallDate
-        #$OS.OSArchitecture
-        #$OS.Caption
-        #$OS.LastBootUpTime
-    $bios = Invoke-Command -ComputerName $livePC -Scriptblock {Get-CIMInstance win32_bios} | Select SerialNumber
-        #$bios.SerialNumber
-    $compSys = Invoke-Command -ComputerName $livePC -Scriptblock {Get-CIMInstance Win32_computerSystem} | Select SerialNumber, Manufacturer, Model, TotalPhysicalMemory, SystemType
-        #$compSys.Manufacturer
-        #$compSys.Model
-        #$compSys.SystemType
-        #$totalMemory = [math]::round($compSys.TotalPhysicalMemory/1024/1024/1024, 2)
-    $cpu = Invoke-Command -ComputerName $livePC -Scriptblock {Get-CIMInstance Win32_Processor} | Select Name, NumberOfCores, NumberOfLogicalProcessors
-        #$cpu.Name
-        #$cpu.NumberOfCores
-        #$cpu.NumberOfLogicalProcessors
-    $wmi = Invoke-Command -ComputerName $livePC -Scriptblock {Get-CIMInstance Win32_WmiSetting} | Select BuildVersion
-        #$wmi.BuildVersion
-
-    $newSysBuild = Invoke-Command -ComputerName $livePC {Get-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\' -Name ReleaseId | select ReleaseId}
-        #$newSysBuild.ReleaseId
-    $buildDate = Invoke-Command -ComputerName $livePC -Scriptblock {Get-CIMInstance Win32_OperatingSystem} | Select InstallDate
-    $networks = Invoke-Command -ComputerName $livePC -Scriptblock {Get-CIMInstance Win32_NetworkAdapterConfiguration | ? {$_.IPEnabled}} | Select IPAddress, MACAddress
-        #$network.IPAddress
-        #$network.MACAddress
-    $vol = Invoke-Command -ComputerName $livePC -Scriptblock {Get-CIMInstance Win32_volume} | Select Caption, driveletter, @{LABEL='GBfreespace';EXPRESSION={"{0:N2}" -f($_.freespace/1GB)}  }, @{LABEL='HDDCapacity';EXPRESSION={"{0:N2}" -f($_.Capacity/1GB)}  }| Where-Object { $_.driveletter -match "C:" } | where {$_.Caption -like "C:\*"} 
-        #$vol.freespace
-        #$vol.HDDCapacity
+    FindOS
+    FindBIOS
+    FindcompSys
+    FindProcessor
+    FindWMI
+    FindWin10Ver
+    FindNetwork
+    FindVol
     
     #Graphics Adapters
-    $gpuDriver = Invoke-Command -ComputerName $livePC -Scriptblock {Get-CIMInstance Win32_VideoController} 
+    FindVideoController
     #Individual Graphics Devices
-    $nvidiaID = Invoke-Command -ComputerName $livePC -Scriptblock {Get-CIMInstance Win32_PnPSignedDriver} | select devicename, HardWareID | where {$_.devicename -like "*nvidia*"} | Select-Object -first 1
-    $intelID  = Invoke-Command -ComputerName $livePC -Scriptblock {Get-CIMInstance Win32_PnPSignedDriver} | select devicename, HardWareID | where {$_.devicename -like "*Graphics*"} | Select-Object -first 1
-    $MicroID  = Invoke-Command -ComputerName $livePC -Scriptblock {Get-CIMInstance Win32_PnPSignedDriver} | select devicename, HardWareID | where {$_.devicename -like "*Basic Display Ad*"} | Select-Object -first 1
-    $EcoID    = Invoke-Command -ComputerName $livePC -Scriptblock {Get-CIMInstance Win32_PnPSignedDriver} | select devicename, HardWareID | where {$_.devicename -like "*Intel(R) 965 Express*"} | Select-Object -first 1
+    FindNvidia
+    FindIntel
+    FindBasic
+    FindEco965
 
     #Registry Commands
-    $username = Invoke-Command -ComputerName $livePC {Get-ItemProperty -Path 'HKLM:\Software\Microsoft\windows\currentVersion\Authentication\LogonUI\' -Name LastLoggedOnUser | select LastLoggedOnUser}
-    $location = Invoke-Command -ComputerName $livePC {Get-ItemProperty -Path 'HKLM:\SOFTWARE\WOW6432Node\RM\Connect\' -Name CurrentLocation | select CurrentLocation}
+    FindLastUser
+    FindCurrentLocation
     
     #Active Directory
-    $lastlogtime = Get-ADComputer -identity $livePC -Properties * | select LastLogonDate
-
-    $totalMemory = [math]::round($compSys.TotalPhysicalMemory/1024/1024/1024, 2)
-
-    foreach ($Network in $Networks) {
-    $IPAddress  = $Network.IpAddress[0]
-    $MACAddress  = $Network.MACAddress
-    $systemBios = $Bios.serialnumber
+    FindLastLoggedOn
+    
     $OutputObj  = New-Object -Type PSObject
     $OutputObj | Add-Member -MemberType NoteProperty -Name ComputerName -Value $livePC.ToUpper()
-    $OutputObj | Add-Member -MemberType NoteProperty -Name Manufacturer -Value $compSys.Manufacturer
-    $OutputObj | Add-Member -MemberType NoteProperty -Name Model -Value $compSys.Model
-    $OutputObj | Add-Member -MemberType NoteProperty -Name SerialNumber -Value $($bios.SerialNumber)
-    $OutputObj | Add-Member -MemberType NoteProperty -Name CPU -Value $($cpu.Name)
-    $OutputObj | Add-Member -MemberType NoteProperty -Name CPU_Cores -Value $($cpu.NumberOfCores)
-    $OutputObj | Add-Member -MemberType NoteProperty -Name CPU_LogicalCores -Value $($cpu.NumberOfLogicalProcessors)
+    $OutputObj | Add-Member -MemberType NoteProperty -Name Manufacturer -Value $global:Manufacturer
+    $OutputObj | Add-Member -MemberType NoteProperty -Name Model -Value $global:PCModel
+    $OutputObj | Add-Member -MemberType NoteProperty -Name SerialNumber -Value $global:systemBios
+    $OutputObj | Add-Member -MemberType NoteProperty -Name CPU -Value $global:CpuName
+    $OutputObj | Add-Member -MemberType NoteProperty -Name CPU_Cores -Value $global:CpuCores
+    $OutputObj | Add-Member -MemberType NoteProperty -Name CPU_LogicalCores -Value $global:CpuLogical
     #$OutputObj | Add-Member -MemberType NoteProperty -Name CPU_Socket -Value $cpu.SocketDesignation
     #Doesn't always work. Some Show as CPU0/CPU1
-    $OutputObj | Add-Member -MemberType NoteProperty -Name Total_Physical_Memory -Value $totalMemory
-    $OutputObj | Add-Member -MemberType NoteProperty -Name C:GBfreeSpace -Value $vol.GBfreespace
-    $OutputObj | Add-Member -MemberType NoteProperty -Name C:Size -Value $vol.HDDCapacity
-    $OutputObj | Add-Member -MemberType NoteProperty -Name Microsoft_ID -Value $MicroID.HardWareID
-    $OutputObj | Add-Member -MemberType NoteProperty -Name Intel_ID -Value $intelID.HardWareID
-    $OutputObj | Add-Member -MemberType NoteProperty -Name Intel965_ID -Value $EcoID.HardWareID
-    $OutputObj | Add-Member -MemberType NoteProperty -Name nVidia_ID -Value $nvidiaID.HardWareID
+    $OutputObj | Add-Member -MemberType NoteProperty -Name Total_Physical_Memory -Value $global:totalMemory
+    $OutputObj | Add-Member -MemberType NoteProperty -Name C:GBfreeSpace -Value $global:HDDFree
+    $OutputObj | Add-Member -MemberType NoteProperty -Name C:Size -Value $global:HDD
+    $OutputObj | Add-Member -MemberType NoteProperty -Name Microsoft_ID -Value $global:MSBasic
+    $OutputObj | Add-Member -MemberType NoteProperty -Name Intel_ID -Value $global:intel
+    $OutputObj | Add-Member -MemberType NoteProperty -Name Eco965_ID -Value $global:Eco965
+    $OutputObj | Add-Member -MemberType NoteProperty -Name nVidia_ID -Value $global:Nvidia
     Foreach ($Card in $gpuDriver)
         {
         $OutputObj | Add-Member NoteProperty "$($Card.DeviceID)_Name" $Card.Name
@@ -217,46 +462,46 @@ foreach ($livePC in $ComputerName){
         $OutputObj | Add-Member NoteProperty "$($Card.DeviceID)_VideoMode" $Card.VideoModeDescription
         }
     #$OutputObj | Add-Member -MemberType NoteProperty -Name Installed_Video -Value ""
-    $OutputObj | Add-Member -MemberType NoteProperty -Name OS -Value $OS.Caption
-    $OutputObj | Add-Member -MemberType NoteProperty -Name SystemType -Value $compSys.SystemType
-    $OutputObj | Add-Member -MemberType NoteProperty -Name BuildVersion -Value $wmi.BuildVersion
-    #$OutputObj | Add-Member -MemberType NoteProperty -Name Windows10Ver -Value $newSysBuild
+    $OutputObj | Add-Member -MemberType NoteProperty -Name OS -Value $global:WindowsOS
+    $OutputObj | Add-Member -MemberType NoteProperty -Name SystemType -Value $global:WindowsOSArchitecture
+    $OutputObj | Add-Member -MemberType NoteProperty -Name BuildVersion -Value $global:BuildVersion
+    #$OutputObj | Add-Member -MemberType NoteProperty -Name Windows10Ver -Value $global:Win10Ver
     #$OutputObj | Add-Member -MemberType NoteProperty -Name SPVersion -Value $OS.csdversion
-    $OutputObj | Add-Member -MemberType NoteProperty -Name IPAddress -Value $IPAddress
-    $OutputObj | Add-Member -MemberType NoteProperty -Name MACAddress -Value $MACAddress
-    $OutputObj | Add-Member -MemberType NoteProperty -Name LastUser -Value $($username.LastLoggedOnUser)
-    $OutputObj | Add-Member -MemberType NoteProperty -Name Last_Logon -Value $($lastlogtime.LastLogonDate)
-    $OutputObj | Add-Member -MemberType NoteProperty -Name Last_Reboot -Value $OS.LastBootUpTime
-    $OutputObj | Add-Member -MemberType NoteProperty -Name Build_Date -Value $($buildDate.InstallDate)
-    $OutputObj | Add-Member -MemberType NoteProperty -Name Location -Value $($location.CurrentLocation) #OU information for CSV
+    $OutputObj | Add-Member -MemberType NoteProperty -Name IPAddress -Value $global:IPAddress
+    $OutputObj | Add-Member -MemberType NoteProperty -Name MACAddress -Value $global:MACAddress
+    $OutputObj | Add-Member -MemberType NoteProperty -Name LastUser -Value $global:User 
+    $OutputObj | Add-Member -MemberType NoteProperty -Name Last_Logon -Value $global:Lastlogontime
+    $OutputObj | Add-Member -MemberType NoteProperty -Name Last_Reboot -Value $global:WindowsLastBootUpTime
+    $OutputObj | Add-Member -MemberType NoteProperty -Name Build_Date -Value $global:WindowsInstallDate
+    $OutputObj | Add-Member -MemberType NoteProperty -Name Location -Value $global:StationLocation #OU information for CSV
     $OutputObj | Export-Csv $exportLocation -Append -NoTypeInformation
 
     ForEach-Object{
             $newobj = [PSCustomObject]@{
                 'ComputerName' = $livePC.ToUpper()
-                'Manufacturer' = $compSys.Manufacturer
-                'Model' = $compSys.Model
-                'Serial Number' = $($bios.SerialNumber)
-                'CPU' = $($cpu.Name)
-                'Cores' = $($cpu.NumberOfCores)
-                'Logical' = $($cpu.NumberOfLogicalProcessors)
-                'RAM' = $totalMemory
-                'OS' = $OS.Caption
-                'Location' = $($location.CurrentLocation)
-                'HDD Size' = $vol.HDDCapacity
-                'HDD Free' = $vol.GBfreespace
+                'Location' = $global:StationLocation
+                'Manufacturer' = $global:Manufacturer
+                'Model' = $global:PCModel
+                'Serial Number' = $global:systemBios
+                'CPU' = $global:CpuName
+                'Cores' = $global:CpuCores
+                'Logical' = $global:CpuLogical
+                'RAM' = $global:totalMemory
+                'OS' = $global:WindowsOS                
+                'HDD Size' = $global:HDD
+                'HDD Free' = $global:HDDFree
                 'Video Card' = $Card.Name
-                'IP Address' = $IPAddress
-                'MAC' = $MACAddress
-                'Last User' = $($username.LastLoggedOnUser)
-                'Login Date' = $($lastlogtime.LastLogonDate)
-                'Last Restart' = $OS.LastBootUpTime
-                'Last Build' = $($buildDate.InstallDate)
+                'IP Address' = $global:IPAddress
+                'MAC' = $global:MACAddress
+                'Last User' = $global:User 
+                'Login Date' = $global:Lastlogontime
+                'Last Restart' = $global:WindowsLastBootUpTime
+                'Last Build' = $global:WindowsInstallDate
 
             }
             $ResultObject.Add($newobj)
             }
-        }
+        
     } 
     }
 
