@@ -1,10 +1,14 @@
   <##
-SCRIPT CREATE BY DANIEL K.
-SCRIPT WILL GATHER ALL HARDWARE INFORMATION ON COMPUTERS OBTAINED VIA A CSV OR ACTIVE DIRECTORY.
-TO USE A CSV FILE, UNCOMMENT OUT THE LOCATION PICKER AND COMMENT OUT THE AD FILTER
-    SAVE LOCATOIN CAN BE MODIFIED USING THE $path VARIABLE
-    TO CHANGE THE OUTPUT FILENAME, THIS CAN BE CHANGED AT $exportLocation
-SCRIPT WILL DELETE PREVIOUS livePC list to make sure no entries are duplicated.
+##############################################################################################################
+#                                                                                                            #
+#       SCRIPT CREATE BY DANIEL K.                                                                           #
+#       SCRIPT WILL GATHER ALL HARDWARE INFORMATION ON COMPUTERS OBTAINED VIA A CSV OR ACTIVE DIRECTORY.     #
+#       TO USE A CSV FILE, UNCOMMENT OUT THE LOCATION PICKER AND COMMENT OUT THE AD FILTER                   #
+#       SAVE LOCATOIN CAN BE MODIFIED USING THE $path VARIABLE                                               #
+#       TO CHANGE THE OUTPUT FILENAME, THIS CAN BE CHANGED AT $exportLocation                                #
+#       SCRIPT WILL DELETE PREVIOUS livePC list to make sure no entries are duplicated.                      #
+#                                                                                                            #
+##############################################################################################################
 1.0 - 	First Draft created
 1.1 -   Added Last_ReBoot
 	    Added LastUser
@@ -33,10 +37,13 @@ SCRIPT WILL DELETE PREVIOUS livePC list to make sure no entries are duplicated.
 1.8     Added Out-Gridview
         Ping once on hardware gather to avoid hangs if computers are shutdown
 1.9     Created Functions to deal with bulk of script
-1.10    Added SSD/HDD type
 1.9.1   Added filter to remove USB devices showing up as a HDD/SSD
-
-	
+2.0     Added UEFI/Legacy check + SecureBoot check. - Requires Testing
+2.0.1   Added Memory bank information - Slots used/Total and if spare
+        Fixed Gridview "Video card" to use '$global:CardName' instead of '$CardName'
+        Changed Gridview "HDD Name" to "HDD Model"
+2.0.2   Updated BIOS/UEFI mode
+        Added Network speed pulled from network adapter.
 ##>
 
 Function Pingit
@@ -106,6 +113,30 @@ Function FindProcessor
         }
     }
 
+Function RAMInfo
+    {
+        if (Test-Connection -ComputerName $livePC  -Quiet -count 1 -BufferSize 16) {
+            $global:memory = Invoke-Command -ComputerName $livePC -Scriptblock {Get-WmiObject -class "win32_physicalmemory" -namespace "root\CIMV2"}
+            #Write-Host "Memore Modules:" -ForegroundColor Green
+            #$global:memory | Format-Table Tag,BankLabel,@{n="Capacity(GB)";e={$_.Capacity/1GB}},Manufacturer,PartNumber,Speed -AutoSize
+            $global:TotalSlots = Invoke-Command -ComputerName $livePC -Scriptblock {((Get-WmiObject -Class "win32_PhysicalMemoryArray" -namespace "root\CIMV2").MemoryDevices | Measure-Object -Sum).Sum}
+            $global:roundedMem = $((($global:memory).Capacity | Measure-Object -Sum).Sum/1GB)
+            $global:UsedSlots = (($global:memory) | Measure-Object).Count
+            $global:FreeBankCount = $global:TotalSlots-$global:UsedSlots
+        }
+        Else {
+            $global:UsedSlots = "Station Shutdown"
+            $global:TotalSlots = "Station Shutdown"
+            $global:roundedMems = "Station Shutdown"
+        }
+        If ($global:UsedSlots -eq $global:TotalSlots) {
+            $global:spare = "No"
+        }
+        Else {
+            $global:spare = "Yes"
+        }
+    }
+
 Function FindWMI
     {
         if (Test-Connection -ComputerName $livePC  -Quiet -count 1 -BufferSize 16) {
@@ -147,13 +178,28 @@ Function FindWin10VerNew
 Function FindNetwork
     {
         if (Test-Connection -ComputerName $livePC  -Quiet -count 1 -BufferSize 16) {
-            $global:networks = Invoke-Command -ComputerName $livePC -Scriptblock {Get-CIMInstance Win32_NetworkAdapterConfiguration | ? {$_.IPEnabled}} | Select IPAddress, MACAddress
+            $global:networks = Invoke-Command -ComputerName $livePC -Scriptblock {Get-CIMInstance Win32_NetworkAdapterConfiguration | ? {$_.IPEnabled}} | Select IPAddress, MACAddress, Description
             $global:IPAddress = $global:Networks.IPAddress[0]
             $global:MACAddress = $global:Networks.MACAddress
+            $global:NetworkDescription = $global:Networks.Description
         }
         Else {
             $global:IPAddress = "Station Shutdown"
             $global:MACAddress = "Station Shutdown"
+        }
+    }
+
+Function FindNetworkSpeed
+    {
+        if (Test-Connection -ComputerName $livePC  -Quiet -count 1 -BufferSize 16) {
+            $global:networkSpeed = Invoke-Command -ComputerName $livePC -Scriptblock {Get-NetAdapter | ? {$_.InterfaceOperationalStatus}} | Select-Object -Property Name, InterfaceDescription, MacAddress, FullDuplex, LinkSpeed  
+            $global:InterfaceDescription = $global:networkSpeed.InterfaceDescription
+            $global:duplexspeed = $global:networkSpeed.FullDuplex
+            $global:networkLinkSpeed = $global:networkSpeed.LinkSpeed
+        }
+        Else {
+            $global:duplexspeed = "Station Shutdown"
+            $global:networkLinkSpeed = "Station Shutdown"
         }
     }
 
@@ -193,7 +239,7 @@ Function FindVideoController
                 $global:CardDrivers = $global:gpuDriver.DriverVersion
                 $global:CardHoriz = $global:gpuDriver.CurrentHorizontalResolution
                 $global:CardVert = $global:gpuDriver.CurrentVerticalResolution
-                $monRes = "$global:CardHoriz x $global:CardVert"
+                $global:monRes = "$global:CardHoriz x $global:CardVert"
         }
         Else {
 
@@ -208,6 +254,17 @@ Function FindNvidia
         }
         Else {
                 $global:Nvidia = "Station Shutdown"
+        }
+    }
+
+Function FindAMD
+    {
+        if (Test-Connection -ComputerName $livePC  -Quiet -count 1 -BufferSize 16) {
+            $global:AMDID = Invoke-Command -ComputerName $livePC -Scriptblock {Get-CIMInstance Win32_PnPSignedDriver} | select devicename, HardWareID | where {$_.devicename -like "*AMD*"} | Select-Object -first 1
+            $global:AMD = $global:AMDID.HardWareID 
+        }
+        Else {
+                $global:AMD = "Station Shutdown"
         }
     }
 
@@ -243,8 +300,6 @@ Function FindHyperV
             $global:MSBasic = "Station Shutdown"
         }
     }
-
-
 
 Function FindEco965
     {
@@ -297,16 +352,16 @@ Function CheckExisting
                 Write-Host -foregroundcolor Green "$path has been created."
             }
         Else {
-                Write-Host -foregroundcolor DarkYellow "$path has ALREADY been created."
+                Write-Host -foregroundcolor Cyan "$path has ALREADY been created."
             }
 
 #Deletes livePC's text 
         if (Test-Path $fileName) {
                 Remove-Item $fileName
-                Write-Host -foregroundcolor DarkYellow "The old $fileName has been deleted."
+                Write-Host -foregroundcolor Cyan "The old $fileName has been deleted."
             }
         Else {
-                Write-Host -foregroundcolor Darkyellow "$fileName does not exist..."
+                Write-Host -foregroundcolor Green "$fileName does not exist..."
             }
         #Removes incomplete $csv 
         if (Test-Path $exportLocation) {
@@ -316,6 +371,38 @@ Function CheckExisting
         Else {
                 #Write-Host -foregroundcolor Darkyellow "$exportLocation does not exist..."
             }
+    }
+
+Function BiosUEFI
+    {
+        if(!(Test-Connection -ComputerName $livePC  -Quiet -count 1 -BufferSize 16)) {
+            $global:BIOSUEFIstatus = "Shutdown" 
+            }
+        else {
+            $biosUEFI = Invoke-Command -ComputerName $livePC {Get-SecureBootUEFI -Name setupmode}
+            }
+        if ($biosUEFI.Bytes) {
+            $global:BIOSUEFIstatus = "UEFI"
+        }
+        else {
+            $global:BIOSUEFIstatus = "BIOS"
+        }
+    }
+
+Function SecureBoot
+    {
+        if(!(Test-Connection -ComputerName $livePC  -Quiet -count 1 -BufferSize 16)) {
+            $global:SecureBootstatus = "Shutdown" 
+            }
+        else {
+            $SecureBoot = Invoke-Command -ComputerName $livePC {Get-SecureBootUEFI -Name SecureBoot} 
+            }
+        if ($SecureBoot.Bytes) {
+            $global:SecureBootstatus = "SecureBoot On"
+        }
+        else {
+            $global:SecureBootstatus = "SecureBoot Off"
+        }        
     }
 
 Function WriteHardwareCSV
@@ -329,6 +416,7 @@ Function WriteHardwareCSV
         $OutputObj | Add-Member -MemberType NoteProperty -Name CPU_Cores -Value $global:CpuCores
         $OutputObj | Add-Member -MemberType NoteProperty -Name CPU_LogicalCores -Value $global:CpuLogical
         $OutputObj | Add-Member -MemberType NoteProperty -Name Total_Physical_Memory -Value $global:totalMemory
+        $OutputObj | Add-Member -MemberType NoteProperty -Name Used/total -Value "$global:UsedSlots/$global:TotalSlots"
         $OutputObj | Add-Member -MemberType NoteProperty -Name C:Size -Value $global:HDD
         $OutputObj | Add-Member -MemberType NoteProperty -Name C:GBfreeSpace -Value $global:HDDFree
         $OutputObj | Add-Member -MemberType NoteProperty -Name DiskName -Value $global:Name
@@ -339,6 +427,7 @@ Function WriteHardwareCSV
         $OutputObj | Add-Member -MemberType NoteProperty -Name Eco965_ID -Value $global:Eco965
         $OutputObj | Add-Member -MemberType NoteProperty -Name nVidia_ID -Value $global:Nvidia
         $OutputObj | Add-Member -MemberType NoteProperty -Name HyperV_ID -Value $global:HyperV
+        $OutputObj | Add-Member -MemberType NoteProperty -Name HyperV_ID -Value $global:AMDID
             Foreach ($Card in $gpuDriver) {
                 $OutputObj | Add-Member NoteProperty "$($Card.DeviceID)_Name" $Card.Name
                 #$OutputObj | Add-Member NoteProperty "$($Card.DeviceID)_Description" $Card.Description #Probably not needed. Seems to just echo the name. Left here in case I'm wrong!
@@ -350,6 +439,9 @@ Function WriteHardwareCSV
         $OutputObj | Add-Member -MemberType NoteProperty -Name OS -Value $global:WindowsOS
         $OutputObj | Add-Member -MemberType NoteProperty -Name SystemType -Value $global:WindowsOSArchitecture
         $OutputObj | Add-Member -MemberType NoteProperty -Name BuildVersion -Value $global:BuildVersion
+        $OutputObj | Add-Member -MemberType NoteProperty -Name BIOS/UEFI -Value $global:BIOSUEFIstatus
+        $OutputObj | Add-Member -MemberType NoteProperty -Name SecureBoot -Value $global:SecureBootstatus
+
         #$OutputObj | Add-Member -MemberType NoteProperty -Name Windows10Ver -Value $global:Win10Ver
         #$OutputObj | Add-Member -MemberType NoteProperty -Name SPVersion -Value $OS.csdversion
         $OutputObj | Add-Member -MemberType NoteProperty -Name IPAddress -Value $global:IPAddress
@@ -374,14 +466,18 @@ Function HardwareGrid
                 'CPU' = $global:CpuName
                 'Cores' = $global:CpuCores
                 'Logical' = $global:CpuLogical
-                'RAM' = $global:totalMemory
-                'OS' = $global:WindowsOS                
+                'RAM' = $global:roundedMem
+                'Used/Total' = "$global:UsedSlots/$global:TotalSlots"
+                'OS' = $global:WindowsOS
+                'BIOS/UEFI' = $global:BIOSUEFIstatus
+                'SecureBoot' = $global:SecureBootstatus                             
                 'HDD Size' = $global:HDD
                 'HDD Free' = $global:HDDFree
-                'HDD Name' = $global:Name
+                'HDD Model' = $global:Name
                 'HDD Type' = $global:DiskType
                 'HDD Serial' = $global:DiskSerial
-                'Video Card' = $Card.Name
+                'Video Card' = $global:CardName
+                'Resolution' = $global:monRes
                 'IP Address' = $global:IPAddress
                 'MAC' = $global:MACAddress
                 'Last User' = $global:User 
@@ -396,81 +492,94 @@ Function HardwareGrid
 Function DevShowAllInfo
     {
         Write-Host "Station: " -f White -nonewline; Write-Host "$livePC" -ForegroundColor Yellow -nonewline; Write-Host " Location: " -f White -nonewline; Write-Host "$global:StationLocation" -ForegroundColor Yellow;
-        
+        #Computer
         Write-Host -ForegroundColor White "Manufacturer:$global:Manufacturer"
         Write-Host -ForegroundColor White "PCModel: $global:PCModel"
         Write-Host -ForegroundColor White "Serial Number: $global:systemBios"
-
+        #Processor
         Write-Host -ForegroundColor Yellow "Processor"
         Write-Host -ForegroundColor White "Processor: $global:CpuName"
         Write-Host -ForegroundColor White "Cores: $global:CpuCores"
         Write-Host -ForegroundColor White "Logical Cores: $global:CpuLogical"
-
+        #RAM
         Write-Host -ForegroundColor Yellow "RAM"
-        Write-Host -ForegroundColor White "RAM: $global:totalMemory"
-
+        Write-Host -ForegroundColor White "RAM: $global:roundedMem"
+       # Write-Host -ForegroundColor White "RAM: $global:totalMemory"
+       # Write-Host -ForegroundColor White "RAM Spare Slot: $global:spare"
+        Write-Host -ForegroundColor White "Used/Total: $global:UsedSlots/$global:TotalSlots"
+        #Storage
         Write-Host -ForegroundColor Yellow "Storage"
         Write-Host -ForegroundColor White "Capacity: $global:HDD"
         Write-Host -ForegroundColor White "Free: $global:HDDFree"
         Write-Host -ForegroundColor White "Disk Name: $global:Name"
         Write-Host -ForegroundColor White "Disk Type: $global:DiskType"
         Write-Host -ForegroundColor White "Disk Serial: $global:DiskSerial"
-
+        #Graphics
         Write-Host -ForegroundColor Yellow "Graphics"
             If($global:MSBasic) {
                 Write-Host -ForegroundColor White "Manufacturer: $global:CardAdapter"
                 Write-Host -ForegroundColor Green "Graphics Driver in use: $global:CardName"
                 Write-Host -ForegroundColor White "Hardware ID :$global:MSBasic"
                 Write-Host -ForegroundColor White "Version: $global:CardDrivers"
-                Write-Host -ForegroundColor White "$monRes" 
+                Write-Host -ForegroundColor White "Resolution: $global:monRes" 
             }
             Elseif($global:intel) {
                 Write-Host -ForegroundColor White "Manufacturer: $global:CardAdapter"
                 Write-Host -ForegroundColor Green "Graphics Driver in use: $global:CardName"
                 Write-Host -ForegroundColor White "Intel Graphics Hardware ID :$global:intel"
                 Write-Host -ForegroundColor White "Version: $global:CardDrivers"
-                Write-Host -ForegroundColor White "$monRes" 
+                Write-Host -ForegroundColor White "Resolution: $global:monRes" 
             }
             Elseif($global:Eco965) {
                 Write-Host -ForegroundColor White "Manufacturer: $global:CardAdapter"
                 Write-Host -ForegroundColor Green "Graphics Driver in use: $global:CardName"
                 Write-Host -ForegroundColor White "Intel/Eco965Hardware ID :$global:Eco965"
                 Write-Host -ForegroundColor White "Version: $global:CardDrivers"
-                Write-Host -ForegroundColor White "$monRes" 
+                Write-Host -ForegroundColor White "Resolution: $global:monRes" 
             }
             Elseif($global:Nvidia) {
                 Write-Host -ForegroundColor White "Manufacturer: $global:CardAdapter"
                 Write-Host -ForegroundColor Green "Graphics Driver in use: $global:CardName"
                 Write-Host -ForegroundColor White "Nvidia Hardware ID :$global:Nvidia"
                 Write-Host -ForegroundColor White "Version: $global:CardDrivers"
-                Write-Host -ForegroundColor White "Resolution: $monRes" 
+                Write-Host -ForegroundColor White "Resolution: $global:monRes" 
+            }
+            Elseif($global:AMD) {
+                Write-Host -ForegroundColor White "Manufacturer: $global:CardAdapter"
+                Write-Host -ForegroundColor Green "Graphics Driver in use: $global:CardName"
+                Write-Host -ForegroundColor White "AMD Hardware ID : $global:AMD"
+                Write-Host -ForegroundColor White "Version: $global:CardDrivers"
+                Write-Host -ForegroundColor White "Resolution: $global:monRes" 
             }
             Elseif($global:HyperV) {
                 Write-Host -ForegroundColor White "Manufacturer: $global:CardAdapter"
                 Write-Host -ForegroundColor Green "Graphics Driver in use: $global:CardName"
                 Write-Host -ForegroundColor White "Nvidia Hardware ID : $global:HyperV"
                 Write-Host -ForegroundColor White "Version: $global:CardDrivers"
-                Write-Host -ForegroundColor White "Resolution: $monRes" 
+                Write-Host -ForegroundColor White "Resolution: $global:monRes" 
             }
-             Else {
+            Else {
                 Write-Host -ForegroundColor White "Manufacturer: $global:CardAdapter"
                 Write-Host -ForegroundColor Yellow "Graphics Driver in use: $global:CardName"
                 Write-Warning "Please report station name to Dan"
                 Write-Host -ForegroundColor Red "Not Sure What This Is?"
                 Write-Host -ForegroundColor Green "Version: $global:CardDrivers"
-                Write-Host -ForegroundColor White "$monRes" 
+                Write-Host -ForegroundColor White "Resolution: $global:monRes" 
             }
-        
+        #Windows OS Info
         Write-Host -ForegroundColor Yellow "Windows"
         Write-Host "$global:WindowsOS" -f white -nonewline; Write-Host " - $global:Win10Ver" -ForegroundColor white
-        Write-Host -ForegroundColor White "$global:WindowsOSArchitecture"
-        Write-Host -ForegroundColor White "$global:BuildVersion"
-        Write-Host -ForegroundColor White "$global:IPAddress"
-        Write-Host -ForegroundColor White "$global:MACAddress"
-        Write-Host -ForegroundColor White "$global:User"
-        Write-Host -ForegroundColor White "$global:Lastlogontime"
-        Write-Host -ForegroundColor White "$global:WindowsLastBootUpTime"
-        Write-Host -ForegroundColor White "$global:WindowsInstallDate"
+        Write-Host -ForegroundColor White "Architecture: $global:WindowsOSArchitecture"
+        Write-Host -ForegroundColor White "BuildVersion: $global:BuildVersion"
+        Write-Host -ForegroundColor White "BIOS/UEFI: $global:BIOSUEFIstatus"
+        Write-Host -ForegroundColor White "SecureBoot Status: $global:SecureBootstatus"
+        Write-Host -ForegroundColor White "IP Address: $global:IPAddress"
+        Write-Host -ForegroundColor White "MAC Address: $global:MACAddress"
+        Write-Host -ForegroundColor White "Last User: $global:User"
+        Write-Host -ForegroundColor White "Last Login: $global:Lastlogontime"
+        Write-Host -ForegroundColor White "Last Restart: $global:WindowsLastBootUpTime"
+        Write-Host -ForegroundColor White "Windows Install: $global:WindowsInstallDate"
+        write-host ""
     }
 
 # On error the script will continue silently without 
@@ -486,7 +595,8 @@ $testcomputers = $fileLocation.FileName
 #>
 
 # Use AD to get Computers and filter out all that aren't Windows Server OS
-$testcomputers = Get-ADComputer -Filter {(OperatingSystem -notlike "*windows*server*")}
+#$testcomputers = Get-ADComputer -Filter {(OperatingSystem -notlike "*windows*server*")} 
+$testcomputers = Get-ADComputer -Filter { OperatingSystem -notlike "*Windows*Server*" } | where-object {[string]$_.Name -notlike "*NETMAN*" }
 # Looking through the txt file above and counting computer names. then working out % based on how many have been pinged
 $test_computer_count = $testcomputers.Length;
 #Percentage Count
@@ -526,7 +636,8 @@ foreach ($computer in $testcomputers) {
         $online += $hostname
         $xLive++;
         $xTotal++;
-        Write-Host -foregroundcolor Green "$xTotal. $livecomp has been added to the Live List. $xLive of $test_computer_count"
+        #Write-Host -foregroundcolor Green "$xTotal. $livecomp has been added to the Live List. $xLive of $test_computer_count ONLINE"
+        Write-Host "$xTotal." -f white -nonewline; Write-Host " $livecomp has been added to the Live List." -ForegroundColor Cyan -nonewline; Write-Host " $xLive of $test_computer_count ONLINE" -f Green;
     }
     else {
         $hostname = $livecomp
@@ -535,8 +646,8 @@ foreach ($computer in $testcomputers) {
         $xDead++;
         $xTotal++;
         Add-Content -value $computer.Name -path $fileName
-        
-        Write-Host -foregroundcolor Red "$xTotal. $livecomp cannot be contacted. $xDead of $test_computer_count"
+        #Write-Host -foregroundcolor Red "$xTotal. $livecomp cannot be contacted. $xDead of $test_computer_count OFFLINE"
+        Write-Host "$xTotal." -f white -nonewline; Write-Host " $livecomp cannot be contacted." -ForegroundColor Cyan -nonewline; Write-Host " $xDead of $test_computer_count OFFLINE" -f Red;
     }
     $testcomputer_progress = [int][Math]::Ceiling((($x / $test_computer_count) * 100))
 	# Progress bar
@@ -555,7 +666,7 @@ $ComputerName = $online
 $computer_count = $ComputerName.Length;
 $i = 0;
 $p = 0;
-#$livePC = "NETDT029"
+#$livePC = "BRKNETMAN"
 foreach ($livePC in $ComputerName){
     if (Test-Connection -ComputerName $livePC -Quiet -count 1 -BufferSize 16){
         $p++;
@@ -567,12 +678,16 @@ foreach ($livePC in $ComputerName){
         $i++;
 
         FindOS
+        BiosUEFI
+        SecureBoot
         FindBIOS
         FindcompSys
         FindProcessor
+        RAMinfo
         FindWMI
         FindWin10Ver
         FindNetwork
+        FindNetworkSpeed
         FindVol
         FindDiskType
         #Graphics Adapters
@@ -583,6 +698,7 @@ foreach ($livePC in $ComputerName){
         FindBasic
         FindHyperV
         FindEco965
+        FindAMD
 
         #Registry Commands
         FindLastUser
@@ -591,23 +707,25 @@ foreach ($livePC in $ComputerName){
         #Active Directory
         FindLastLoggedOn
         
+        #Methods of viewing data #Comment out which are not required.
         DevShowAllInfo
         WriteHardwareCSV
         HardwareGrid
     } 
 }
-
-$ResultObject  | Out-Gridview -Title "Hardware Information"
-
+write-host ""
 write-host -foregroundcolor cyan "Renaming $csvName" 
- 
 $newCSV = Get-ChildItem $exportLocation 
 $time = (Get-Date).tostring("dd-MM-yyyy-HH.mm.ss")    
 $RenameCSV = "$($newCSV.DirectoryName)\$($newCSV.BaseName)[$($time)]$($newCSV.Extension)"
 Rename-Item $exportlocation -NewName $RenameCSV    
 
-write-host -foregroundcolor cyan "$csvName has been renamed to $RenameCSV)"
-write-host -foregroundcolor cyan "Script is complete, the results are here: $path"
-Write-host -foregroundcolor green "Script started at $startTime and finished at $time"
-
+Write-Host -ForegroundColor Yellow
+#write-host -foregroundcolor cyan "$csvName has been renamed to $RenameCSV"
+#write-host -foregroundcolor cyan "Script is complete, the results are here: $path"
+#Write-host -foregroundcolor green "Script started at $startTime and finished at $time"
+Write-Host "$csvName " -f yellow -nonewline; Write-Host "has been renamed to" -ForegroundColor white -nonewline; Write-Host " $RenameCSV." -f yellow;
+Write-Host "Script has complete." -f green -nonewline; Write-Host " The Results have been saved to" -ForegroundColor white -nonewline; Write-Host "  $path." -f yellow;
+Write-Host "The Script started at" -f white -nonewline; Write-Host " $startTime" -ForegroundColor Yellow -nonewline; Write-Host " and finished at" -f white; Write-Host "$time" -ForegroundColor Yellow -nonewline;
 Invoke-Item $path
+$ResultObject  | Out-Gridview -Title "Hardware Information"
